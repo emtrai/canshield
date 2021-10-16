@@ -46,6 +46,32 @@ mcp2515_can CAN(SPI_CS_PIN); // Set CS pin
 #define TAG_MASK "msk"
 #define TAG_FILTER "flt"
 
+#define VAL_DELIMITER ','
+
+#define DELIMITER ','
+#define END_IN_STRING '\n'
+#define MAX_IN_STRING_LEN 128
+
+#define ERR_NONE (0)
+#define ERR_FAILED (-1)
+#define ERR_INPUT_INVALID (-2)
+#define ERR_INPUT_INVALID (-2)
+
+//#define DEBUG_ENABLE
+
+#ifdef DEBUG_ENABLE
+#define LOGD(data) do{ resplog(data); \
+                    } while(0)
+#define LOGDV(data) do{ resplogV(data); \
+                    } while(0)
+#else// !DEBUG_ENABLE
+#define LOGD(data) void()
+#define LOGDV(data) void()
+#endif //DEBUG_ENABLE
+
+
+#define MAX_ARG_NUM 10
+
 unsigned char flagRecv = 0;
 unsigned char len = 0;
 unsigned char buf[8];
@@ -74,17 +100,17 @@ void respVal(const char* tag, long val, unsigned char type=DEC, unsigned char ne
   }
 }
 
-void resplog(const char* data, unsigned char newline = 1){
+void resplogHigh(const char* data, unsigned char newline = 1){
   resp(TAG_LOG, data, newline);
 }
 
-void resplog2(const char* data, int val, unsigned type=DEC){
+void resplogHigh2(const char* data, int val, unsigned type=DEC){
   printTag(TAG_LOG);
   SERIAL_PORT_MONITOR.print(data);
   SERIAL_PORT_MONITOR.print(val, type);
   SERIAL_PORT_MONITOR.println();
 }
-void resplog3(const char* msg, const char* data, int len=8, unsigned type=HEX){
+void resplogHigh3(const char* msg, const char* data, int len=8, unsigned type=HEX){
   int i = 0;
   printTag(TAG_LOG);
   if (msg != NULL){
@@ -97,8 +123,27 @@ void resplog3(const char* msg, const char* data, int len=8, unsigned type=HEX){
   SERIAL_PORT_MONITOR.println();
 }
 
+void resplog(const char* data, unsigned char newline = 1){
+#ifdef DEBUG_ENABLE
+  resplogHigh(data, newline);
+#endif //DEBUG_ENABLE
+}
+
+void resplog2(const char* data, int val, unsigned type=DEC){
+#ifdef DEBUG_ENABLE
+  resplogHigh2(data, val, type);
+#endif //DEBUG_ENABLE
+}
+void resplog3(const char* msg, const char* data, int len=8, unsigned type=HEX){
+#ifdef DEBUG_ENABLE
+  resplogHigh3(msg, data, len, type);
+#endif //DEBUG_ENABLE
+}
+
 void resplogV(long val, unsigned char type=DEC, unsigned char newline = 1){
+#ifdef DEBUG_ENABLE
   respVal(TAG_LOG, val, type, newline);
+#endif //DEBUG_ENABLE
 }
 
 
@@ -109,29 +154,7 @@ void respErr(int err){
 void respCAN(const char* data){
  resp(TAG_CAN, data, 1);
 }
-#define DELIMITER ','
-#define END_IN_STRING '\n'
-#define MAX_IN_STRING_LEN 128
 
-#define ERR_NONE (0)
-#define ERR_FAILED (-1)
-#define ERR_INPUT_INVALID (-2)
-#define ERR_INPUT_INVALID (-2)
-
-#define DEBUG_ENABLE
-
-#ifdef DEBUG_ENABLE
-#define LOGD(data) do{ resplog(data); \
-                    } while(0)
-#define LOGDV(data) do{ resplogV(data); \
-                    } while(0)
-#else// !DEBUG_ENABLE
-#define LOGD(data) void()
-#define LOGDV(data) void()
-#endif //DEBUG_ENABLE
-
-
-#define MAX_ARG_NUM 10
 
 
 String tag = "";
@@ -158,10 +181,11 @@ int getInput(){
   if (Serial.available())  {
     char c = Serial.read();
     if (c == END_IN_STRING){
-      LOGD("End string, out");
+      LOGD("End string");
+      LOGD(tag.c_str());
+      LOGD(value.c_str());
       LOGDV(inStringCnt);
       ret = inStringCnt;
-//      resetInput();
       return ret;
     }
 
@@ -171,7 +195,9 @@ int getInput(){
         value = "";
       }
       else
+      {
         tag += c;
+      }
     }
     else{
       value += c;
@@ -187,19 +213,20 @@ int getInput(){
 }
 
 
-int parseInput(const String& val){
+int parseInput(){
   LOGD("Parse Input:");
-  LOGD(val.c_str());
-  if (val.length() > 0){
+  LOGD(value.c_str());
+  if (value.length() > 0){
     int i = 0;
     int idx = 0;
     num_args = 0;
     args[idx] = "";
-    for (i = 0; i < val.length(); i++){
-      if (val[i] != DELIMITER){
-        args[idx] += val[i];
+    for (i = 0; i < value.length(); i++){
+      if (value[i] != VAL_DELIMITER){
+        args[idx] += value[i];
       }
       else{
+        LOGD(args[idx].c_str());
         idx++;
         args[idx] = "";
       }
@@ -212,11 +239,13 @@ int parseInput(const String& val){
 }
 
 void setMask(unsigned int mask){
+    resplogHigh2("setMask ", mask, HEX);
     CAN.init_Mask(0, 0, mask);                         // there are 2 mask in mcp2515, you need to set both of them
     CAN.init_Mask(1, 0, mask);
 }
 
 void setFilter(unsigned int filter){
+    resplogHigh2("setFilter ", filter, HEX);
     CAN.init_Filt(0, 0, filter);                          // there are 6 filter in mcp2515
     CAN.init_Filt(1, 0, filter);                          // there are 6 filter in mcp2515
 
@@ -225,19 +254,21 @@ void setFilter(unsigned int filter){
     CAN.init_Filt(4, 0, filter);                          // there are 6 filter in mcp2515
     CAN.init_Filt(5, 0, filter);                          // there are 6 filter in mcp2515
 }
-
+//#define SERIAL_SPEED 115200
+#define SERIAL_SPEED 921600
 void setup() {
-    SERIAL_PORT_MONITOR.begin(115200);
+    SERIAL_PORT_MONITOR.begin(SERIAL_SPEED);
     while (!SERIAL_PORT_MONITOR) {
         ; // wait for serial port to connect. Needed for native USB port only
     }
+    SERIAL_PORT_MONITOR.setTimeout(200);
     attachInterrupt(digitalPinToInterrupt(CAN_INT_PIN), MCP2515_ISR, FALLING); // start interrupt
     while (CAN_OK != CAN.begin(CAN_500KBPS, MCP_8MHz)) {             // init can bus : baudrate = 500k
         resplog("CAN init fail, retry...");
         delay(100);
     }
-    setMask(0xFFFF);
-    setFilter(0);
+    setMask(0x600);
+    setFilter(0x600);
     resplog("CAN init ok!");
 }
 
@@ -293,33 +324,32 @@ void canReceive(){
 
 void canSend(){
   if (num_args > 3){
-    id = args[0].toInt();
-    type = args[1].toInt();
-    len = args[2].toInt();
+    id = strtol(args[0].c_str(), 0, 16);
+    type = strtol(args[1].c_str(), 0, 16);
+    len = strtol(args[2].c_str(), 0, 16);
     
     if (args[3].length() > 0){
-      String* value = &args[2];
+      String* candata = &args[3];
       int i = 0;
       int idx = 0;
       int num_args = 0;
       memset(cdata, 0, sizeof(cdata));
-      char* command = strtok(value->c_str(), " ");
+      char* command = strtok(candata->c_str(), " ");
       while (command != 0)
       {
-          cdata[idx] = atoi(command);
+          cdata[idx] = strtol(command, 0, 16);
           idx++;
           if (idx > MAX_DATA_SIZE)
             break;
           // Find the next command in input string
-          command = strtok(0, "&");
+          command = strtok(0, " ");
       }
       if (idx > 0){
-#ifdef DEBUG_ENABLE
-        resplog2("send to 0x", id, HEX);
-        resplog3("send data", cdata, MAX_DATA_SIZE, HEX);
-#endif
+        resplogHigh2("send 0x", id, HEX);
+//        resplogHigh3("send data ", cdata, MAX_DATA_SIZE, HEX);
+        resplog3("send data ", cdata, MAX_DATA_SIZE, HEX);
         int ret = CAN.sendMsgBuf(id, type, len, cdata);
-        resplogV(ret);
+        resplogHigh2("ret", ret);
       }
       else{
         resplog("no data to send");
@@ -341,14 +371,24 @@ void sendTest(){
 void loop() {
 //  SERIAL_PORT_MONITOR.println("loop");
 
-  sendTest();
+//  sendTest();
   canReceive();
   int ret = getInput();
   if (ret > 0){
-    ret = parseInput(value);
+    ret = parseInput();
     if (ret > 0){
       if (tag == TAG_CAN){
         canSend();
+      }
+      else
+      if (tag == TAG_MASK && num_args > 0){
+        int mask = strtol(args[0].c_str(), 0, 16);
+        setMask(mask);
+      }
+      else
+      if (tag == TAG_FILTER && num_args > 0){
+        int mask = strtol(args[0].c_str(), 0, 16);
+        setFilter(mask);
       }
 //#ifdef DEBUG
 //    {
@@ -370,28 +410,7 @@ void loop() {
   else{
     // do nothing
   }
-//  delay(100);
-//    if (flagRecv) {
-//        // check if get data
-//
-//        flagRecv = 0;                   // clear flag
-//        SERIAL_PORT_MONITOR.println("into loop");
-//        // iterate over all pending messages
-//        // If either the bus is saturated or the MCU is busy,
-//        // both RX buffers may be in use and reading a single
-//        // message does not clear the IRQ conditon.
-//        while (CAN_MSGAVAIL == CAN.checkReceive()) {
-//            // read data,  len: data length, buf: data buf
-//            SERIAL_PORT_MONITOR.println("checkReceive");
-//            CAN.readMsgBuf(&len, buf);
-//
-//            // print the data
-//            for (int i = 0; i < len; i++) {
-//                SERIAL_PORT_MONITOR.print(buf[i]); SERIAL_PORT_MONITOR.print("\t");
-//            }
-//            SERIAL_PORT_MONITOR.println();
-//        }
-//    }
+
 }
 
 /*********************************************************************************************************

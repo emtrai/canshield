@@ -14,6 +14,8 @@ TAG_SPLIT=":"
 VALUE_SPLIT=","
 
 TAG_CAN="can"
+TAG_MASK="msk"
+TAG_FILTER="flt"
 
 DEFAULT_PORT = '/dev/cu.usbmodem14201'
 DEFAULT_SPEED = 115200
@@ -40,14 +42,20 @@ class CanShieldDevice:
                 msg = self.serialDev.readline()
                 
                 if (msg is not None) and len(msg) > 0:
-                    self.handleReceiveData(str(msg, 'utf-8'))
+                    try:
+                        self.handleReceiveData(str(msg, 'utf-8'))
+                    except:
+                        log.e("Failed to parse receive data")
+                self.serialDev.write(b'\n')
             else:
-                break;
+                break
         
         log.i("Receiving thread is stopped")
 
     def handleReceiveData(self, msg):
-        log.i("rec %s" % msg)
+        print("<<<")
+        print(msg)
+        print(">>>")
         try:
             eles = msg.split(TAG_SPLIT,1)
             type = can_device.RECV_TYPE_ERR
@@ -116,19 +124,39 @@ class CanShieldDevice:
 
         self.isStop = False
         run_thread.start()
-
-        return common.ERR_NONE;
+        self.dosend() # kick device to run
+        sleep(3) # sleep for a while to wait device init
+        return common.ERR_NONE
 
     def stop(self):
         self.isStop = True
         self.serialDev.close()
-        return common.ERR_NONE;
+        return common.ERR_NONE
+
+    def dosend(self, msg = None):
+        if msg is not None and len(msg) > 0:
+            log.i("dosend %s" % msg)
+            self.serialDev.write(b'\n')
+            self.serialDev.write(msg.encode('utf-8'))
+        self.serialDev.write(b'\n')
+        
+        return common.ERR_NONE
 
     def send(self, canmsg):
-        msg = "0x%x,0x%x,0x%x," % (canmsg.id, canmsg.type,canmsg.maxLen)
+        msg = "%s:0x%x,0x%x,0x%x," % (TAG_CAN, canmsg.id, canmsg.type,canmsg.maxLen)
         
         for i in canmsg.data:
             msg += "0x%X " % i
-        msg += "\n"
-        log.i("send %s" % msg)
-        self.serialDev.write(msg.encode('utf-8'))
+        return self.dosend(msg)
+
+    def sendMask(self, mask):
+        msg = "%s:0x%x" % (TAG_MASK, mask)
+        return self.dosend(msg)
+
+    def sendFilter(self, filter):
+        msg = "%s:0x%x" % (TAG_FILTER, filter)
+        return self.dosend(msg)
+    
+    def sendBreak(self):
+        log.i("send break")
+        return self.dosend()

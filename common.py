@@ -1,5 +1,8 @@
 
 
+import time
+
+
 ERR_NONE = 0
 ERR_FAIED = -1
 ERR_NOT_SUPPORT = -2
@@ -12,3 +15,7 @@ ERR_EXCEPTION = -7
 DEFAULT_TAG = "canpc"
 
 DEBUG=True
+
+
+def current_milli_time():
+    return round(time.time() * 1000)

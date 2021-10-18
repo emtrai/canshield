@@ -1,14 +1,10 @@
 
-import time
-
 
 DEFAULT_TAG = "canpc"
 
 DEBUG=True
 
-
-def current_milli_time():
-    return round(time.time() * 1000)
+from common import current_milli_time
 
 def logD(msg, tag=DEFAULT_TAG):
     if DEBUG:
@@ -36,3 +32,14 @@ class Log:
 
     def e(self, msg):
         logE(msg, self.tag)
+
+    def dumpBytes(self, msg, data):
+        if DEBUG:
+            if (data is not None and len(data) > 0):
+                msg += "(%d)0x" % len(data)
+                for i in data:
+                    msg += "%x" % i
+                return msg
+            else:
+                msg += "no data"
+            log.d(msg)

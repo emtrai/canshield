@@ -7,9 +7,13 @@ RECV_TYPE_ERR = 2
 
 class CanDevice:
 
+    def name(self):
+        return "unknown"
 
+    def isReady(self):
+        return False
 
-    def start(self, recv_callback):
+    def start(self, recv_callback = None, rec_can_callback = None):
         return common.ERR_NOT_SUPPORT
 
     def sendMask(self, mask):

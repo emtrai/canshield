@@ -1,5 +1,29 @@
-#ids:0xF82,0xF02
-ids:0xF82,0xF02
+#<tag>:<value
+# filter:<id>,<id> --> set filter ids (receive message from those can ids)
+# sleep: <time in ms> --> sleep
+# inc: <fname> or <abs path> --> script file included to this script
+
+# sen raw can message
+# can: <canid>,<response canid>,<type>,<max len>, <data in hex, separated by space>
+# i.e. can:0x684, 0x604, 8, 0x03 0x22 0xF1 0x10 0 0 0 0
+
+# send diag message
+# can: <canid>,<response canid>,<type>,<max len>, <data in hex, separated by space>
+# diag:0x684, 0x604, 0, 8, 0x22 0xF1 0x94
+# can frame shall be built basing on diag message
+
+# wait for previous can/diag message to be completed
+# wait: <time in ms> 
+# wait until specified time or message is completed
+# if time is not specified, wait until max timeout 
+# if time is specified
+
+# timeout: <time in ms> ---> max waiting time for can message
+
+# break:  --> send break command to device
+
+
+filter:0xF82,0xF02
 wait:500
 can:0xF82,0,8,0x02 0x19 0x01 0xFF 0 0 0 0
 wait:2000

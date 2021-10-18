@@ -2,7 +2,8 @@ import common
 from serial import Serial
 from threading import Thread
 from time import sleep
-from Queue import Queue
+from queue import Queue
+import queue
 
 from applog import Log
 from can_msg import CanMsg
@@ -12,7 +13,10 @@ import traceback
 from can_msg import MAX_LEN
 
 import can_frame
+import can_msg
+import can_msg_fac
 
+from applog import DEBUG
 
 SEND_TAG="snd"
 TAG_SPLIT=":"
@@ -24,7 +28,7 @@ TAG_FILTER="flt"
 
 DEFAULT_PORT = '/dev/cu.usbmodem14201'
 DEFAULT_SPEED = 115200
-DEFAULT_MSG_TIMEOUT_MS = 100
+DEFAULT_MSG_TIMEOUT_MS = (10 * 1000)
 
 TAG="canshield"
 
@@ -41,7 +45,6 @@ class CanShieldDevice:
     run_recv_thread = None
     can_thread = None
 
-    canMsgSent = {}
     canMsgWaitRespList = {}
     canFrameQueue = Queue(100)
 
@@ -49,7 +52,7 @@ class CanShieldDevice:
     def thread_recv_data(self):
         log.i("Start receiving thread")
 
-        while not self.isStop and not self.run_recv_thread:
+        while not self.isStop and self.run_recv_thread is not None:
             # read one by one
             if self.serialDev is not None and self.serialDev.is_open:
                 msg = self.serialDev.readline()
@@ -79,25 +82,32 @@ class CanShieldDevice:
         values = value.split(VALUE_SPLIT)
         canframe = None
         if len(values) > 3: # must be 4 elements
-            id = int(values[0].stript(), 0) # canid
+            id = int(values[0].strip(), 0) # canid
             
             if (id > 0): 
-                data = None
-                type = int(values[1].stript(), 0)
-                maxLen = int(values[2].stript(), 0)
-                datastring = value[3].stript()
+                data = []
+                type = int(values[1].strip(), 0)
+                maxLen = int(values[2].strip(), 0)
+                datastring = values[3].strip()
                 if len(datastring) > 0:
                     # data is separated by space
                     datas = datastring.split(" ")
                     if (len(datas) > 0):
                         for i in datas:
                             data.append(int(i.strip(), 0))
+                        log.dumpBytes("canframe data ", data)
                         # parse can frame
-                        canframe = can_frame.parse2CanFrame(id = id, type = type, maxLen = maxLen, data = data)
+                        ft = can_frame.FRAME_TYPE_RAW
+                        if id in self.canMsgWaitRespList:
+                            log.d("Found resp for id 0x%x" % id)
+                            canmsgresp = self.canMsgWaitRespList[id]
+                            if canmsgresp is not None and canmsgresp.canmsg is not None and canmsgresp.canmsg.msgType == can_msg_fac.CAN_MSG_TYPE_DIAG:
+                                ft = can_frame.FRAME_TYPE_EXTEND
+                        canframe = can_frame.parse2CanFrame(id = id, type = type, maxLen = maxLen, data = data, ft = ft)
                         if canframe is not None:
                             ret = common.ERR_NONE
                         else:
-                            ret = common.ERR_FAIED
+                            ret = common.ERR_FAILED
                             log.e("ParseCanFrame failed")
                     else:
                         log.e("parseCanFrame: Invalid can data")
@@ -115,12 +125,26 @@ class CanShieldDevice:
         return [ret, canframe]
 
     def checkToCleanUpCanMsgWait(self):
+        log.d("checkToCleanUpCanMsgWait")
+        key_del = []
         if len(self.canMsgWaitRespList) > 0:
             for key,resp in self.canMsgWaitRespList.items():
                 if (resp is not None and resp.isTimeout()):
-                    del self.canMsgWaitRespList[key]
+                    if resp.canmsg is not None and resp.canmsg.callback is not None:
+                        ret = resp.canmsg.callback(resp, common.ERR_TIMEOUT)
+                        if ret != common.ERR_PENDING:
+                            key_del.append(key)
+                        else:
+                            resp.timeout = common.current_milli_time() + DEFAULT_MSG_TIMEOUT_MS
+                    else:
+                        key_del.append(key)
+        if len(key_del) > 0:
+            for key in key_del:
+                del self.canMsgWaitRespList[key]
+                log.d("id 0x%x timeout" % key)
         
-    def handleReceiveCanFrame(self, q):
+    def thread_handle_canfram(self, q):
+        log.i("thread_handle_canfram")
         while not self.isStop:
             try:
                 canframe = q.get(timeout = 1000)
@@ -133,53 +157,93 @@ class CanShieldDevice:
                 # TODO: Should out?
             
             if canframe is not None:
-                if canframe.id in self.canMsgWaitRespList:
-                    canmsgresp = self.canMsgWaitRespList[canframe.id]
-                    # receive single frame
-                    if canframe.frametype == can_frame.FRAME_SF:
-                        canmsgresp.setData(canframe.data)
-                        del self.canMsgWaitRespList[canframe.id]
-                        if canmsgresp.canmsg is not None and canmsgresp.canmsg.callback is not None:
-                            canmsgresp.canmsg.callback(canmsgresp)
-
-                    elif canframe.frametype == can_frame.FRAME_FIRST:
-                        canmsgresp.setData(canframe.data)
-                        canmsgresp.maxLen = canframe.datalen
-                        flowcf = can_frame.CanFrameFlow(id)
-                        flowcf.buildFlow(0, 0, 0)
-                        self.sendCanFrame(flowcf)
-                    elif canframe.frametype == can_frame.FRAME_CONSECUTIVE:
-                        canmsgresp.addData(canframe.data)
-                        
-                    elif canframe.frametype == can_frame.FRAME_FLOW:
-                        if canframe.flag == can_frame.FLAG_FLOW_CONT:
-                            cnt = canframe.blocksize 
-                            if cnt == 0:
-                                cnt = canmsgresp.canmsg.getRemainFrame()
-                            
-                            cf = canmsgresp.canmsg.getFrame()
-                            while cf is not None and cnt > 0:
-                                self.sendCanFrame(cf)
-                                sleep(canframe.separatetime/1000)
-                                cf = canmsgresp.canmsg.getFrame()
-                                cnt -= 1
-                        elif canframe.flag == can_frame.FLAG_FLOW_ABORT:
-                            del self.canMsgWaitRespList[canframe.id]
-                            if canmsgresp.canmsg is not None and canmsgresp.canmsg.callback is not None:
-                                canmsgresp.canmsg.callback(canmsgresp)
-                        # TODO:
-                        # elif canframe.flag == can_frame.FLAG_FLOW_WAIT:
-
-
+                log.dumpBytes("handle canframe %s, data" % canframe.toString(), canframe.rawdata)
                 if self.rec_can_callback is not None:
-                    self.rec_can_callback(canframe)
-                
-                self.checkToCleanUpCanMsgWait()
+                    try:
+                        self.rec_can_callback(canframe)
+                    except:
+                        traceback.print_exc()
 
+                self.checkToCleanUpCanMsgWait()
+                if canframe.id in self.canMsgWaitRespList:
+                    log.d("Found resp for id 0x%x" % canframe.id)
+                    canmsgresp = self.canMsgWaitRespList[canframe.id]
+                    ret = common.ERR_NONE
+                    if canframe.frametype == can_frame.FRAME_TYPE_RAW:
+                        log.d("raw can frame")
+                        canmsgresp.setData(canframe.rawdata)
+                        if canmsgresp.canmsg is not None and canmsgresp.canmsg.callback is not None:
+                            ret = canmsgresp.canmsg.callback(canmsgresp, common.ERR_NONE)
+                        if ret != common.ERR_PENDING:
+                            del self.canMsgWaitRespList[canframe.id]
+                        else:
+                            log.i("wait next can response")
+                    else:
+                        log.d("multiple can frame, type %d" % canframe.exframetype)
+                        # receive single frame
+                        if canframe.exframetype == can_frame.FRAME_SF:
+                            canmsgresp.setData(canframe.data)
+                            if canmsgresp.canmsg is not None and canmsgresp.canmsg.callback is not None:
+                                ret = canmsgresp.canmsg.callback(canmsgresp, common.ERR_NONE)
+                            if ret != common.ERR_PENDING:
+                                del self.canMsgWaitRespList[canframe.id]
+                            else:
+                                log.i("wait next can response")
+
+                        elif canframe.exframetype == can_frame.FRAME_FIRST:
+                            canmsgresp.setData(canframe.data)
+                            canmsgresp.maxLen = canframe.datalen
+                            log.d("maxlen for resp %d" % canmsgresp.maxLen)
+                            flowcf = can_frame.CanFrameFlow(canmsgresp.canmsg.id)
+                            flowcf.buildFlow(0, 0, 127)
+                            self.sendCanFrame(flowcf)
+                        elif canframe.exframetype == can_frame.FRAME_CONSECUTIVE:
+                            canmsgresp.addData(canframe.data)
+                            if canmsgresp.isFull():
+                                log.d("received enough data, done")
+                                if canmsgresp.canmsg is not None and canmsgresp.canmsg.callback is not None:
+                                    ret = canmsgresp.canmsg.callback(canmsgresp, common.ERR_NONE)
+                                if ret != common.ERR_PENDING:
+                                    del self.canMsgWaitRespList[canframe.id]
+                                else:
+                                    log.i("wait next can response")
+                            else:
+                                log.d("not enough data, continue receiving")
+                        elif canframe.exframetype == can_frame.FRAME_FLOW:
+                            if DEBUG: log.d("can frame flow %s" % canframe.toString())
+                            if canframe.flag == can_frame.FLAG_FLOW_CONT:
+                                cnt = canframe.blocksize 
+                                if cnt == 0:
+                                    cnt = canmsgresp.canmsg.getRemainFrame()
+                                cf = canmsgresp.canmsg.getFrame()
+                                while cf is not None and cnt > 0:
+                                    if DEBUG: log.d("Send consecutive frame %s" % (cf.toString()))
+                                    self.sendCanFrame(cf)
+                                    sleep(canframe.separatetime/1000)
+                                    # next frame
+                                    cf = canmsgresp.canmsg.getFrame()
+                                    cnt -= 1
+                            elif canframe.flag == can_frame.FLAG_FLOW_ABORT:
+                                log.d("abort canframe")
+                                if canmsgresp.canmsg is not None and canmsgresp.canmsg.callback is not None:
+                                    canmsgresp.canmsg.callback(canmsgresp, common.ERR_NONE)
+                                del self.canMsgWaitRespList[canframe.id]
+                            # TODO:
+                            # elif canframe.flag == can_frame.FLAG_FLOW_WAIT:
+                else:
+                    log.d("can id 0x%x not in waiting list" % canframe.id)
+
+
+                
+                
+            else:
+                log.d("Invalid can frame")
+        log.i("thread_handle_canfram END")
+            
     def handleReceiveData(self, msg):
         if msg is not None:
             msg = msg.strip()
-            log.d("<<< %s >>>" % msg)
+            log.d("##########  %s  ##########" % msg)
         else:
             # no data, skip
             return
@@ -189,23 +253,26 @@ class CanShieldDevice:
         try:
             eles = msg.split(TAG_SPLIT,1)
             type = can_device.RECV_TYPE_ERR
-            ret = common.ERR_FAIED
+            ret = common.ERR_FAILED
             resp = None
-            done = True
             if (len(eles) > 1):
-                tag = eles[0]
-                value = eles[1]
-                log.d("Tag %s" % tag)
-                log.d("Value %s" % value)
+                tag = eles[0].strip()
+                value = eles[1].strip()
+                log.d("Tag '%s'" % tag)
+                log.d("Value '%s'" % value)
 
-                if tag is TAG_CAN:
+                if tag == TAG_CAN:
                     if value is not None and len(value) > 0:
                         [ret, canframe] = self.parseCanFrame(value.strip())
                         if (ret == common.ERR_NONE):
-                            if self.canFrameQueue.full():
+                            if self.canFrameQueue.full(): # full
                                 self.canFrameQueue.get_nowait() # remove oldest frame
 
+                            log.d("Put canframe to queue")
                             self.canFrameQueue.put_nowait(canframe)
+                            resp = canframe
+                            type = can_device.RECV_TYPE_CAN
+                            ret = common.ERR_NONE
                         else:
                             resp = "Parse can frame failed"
                             type = can_device.RECV_TYPE_ERR
@@ -217,9 +284,9 @@ class CanShieldDevice:
                 else:
                     ret = common.ERR_NONE
                     type = can_device.RECV_TYPE_UNKNOWN
-                    resp = msg
+                    resp = "unknown tag %s" % tag
             else:
-                ret = common.ERR_FAIED
+                ret = common.ERR_FAILED
                 type = can_device.RECV_TYPE_UNKNOWN
                 resp = msg
                 log.e("Invalid response %s" % msg)
@@ -229,7 +296,10 @@ class CanShieldDevice:
             ret = common.ERR_EXCEPTION
     
         if self.recv_callback is not None:
-            self.recv_callback(ret, type, resp)
+            try:
+                self.recv_callback(ret, type, resp)
+            except:
+                traceback.print_exc()
 
 
     def config(self, port=DEFAULT_PORT, speed=DEFAULT_SPEED):
@@ -240,21 +310,23 @@ class CanShieldDevice:
 
     def start(self, recv_callback = None, rec_can_callback = None):
         log.d("start")
-        ret = common.ERR_FAIED
+        ret = common.ERR_FAILED
         try:
             self.serialDev = Serial(self.serialPort , self.serialSpeed)
             self.recv_callback = recv_callback
             self.rec_can_callback = rec_can_callback
+
+            # thread to read data from serial
             self.run_recv_thread = Thread(target = self.thread_recv_data)
 
-           
-            can_thread = Thread(target=self.handleReceiveCanFrame, args=(self.canFrameQueue))
-            can_thread.setDaemon(True)
+            # thread to handle can frame
+            can_thread = Thread(target=self.thread_handle_canfram, args=(self.canFrameQueue,))
+            # can_thread.setDaemon(True)
 
             self.isStop = False
             self.run_recv_thread.start()
             self.filter(0xFFFF) # mask all
-            sleep(3) # sleep for a while to wait device init
+            sleep(2) # sleep for a while to wait device init
 
             # start handling can frame
             can_thread.start()
@@ -263,22 +335,29 @@ class CanShieldDevice:
         except:
             traceback.print_exc()
             ret = common.ERR_EXCEPTION
-        return ret;
+        return ret
 
     def stop(self):
         self.isStop = True
         if (self.serialDev is not None):
             self.serialDev.close()
+        self.canFrameQueue.put_nowait(None)
         return common.ERR_NONE
 
     def dosend(self, msg = None):
-        if self.serialDev is not None and self.serialDev.is_open:
-            if msg is not None and len(msg) > 0:
-                log.i("dosend %s" % msg)
-                self.serialDev.write(b'\n')
-                self.serialDev.write(msg.encode('utf-8'))
-            self.serialDev.write(b'\n')
-            ret = common.ERR_NONE
+        log.i("dosend %s" % (msg if msg is not None else ''))
+        if self.isReady():
+            try:
+                if msg is not None and len(msg) > 0:
+                    # log.i("dosend %s" % msg)
+                    self.serialDev.write(b'\n')
+                    self.serialDev.write(msg.encode('utf-8'))
+                self.serialDev.write(b'\n') # break waiting in device to check
+                ret = common.ERR_NONE
+            except:
+                traceback.print_exc()
+                ret = common.ERR_EXCEPTION
+            
         else:
             log.e("Serial port not open")
             ret = common.ERR_NOT_READY
@@ -287,24 +366,36 @@ class CanShieldDevice:
     def send(self, canmsg):
         log.i("Send canmsg 0x%x to %s" % (canmsg.id, self.name()))
         canFrames = can_frame.canMsg2Frames(canmsg)
-        canmsg.canFrames = canFrames
-        if len(self.data) <= MAX_LEN:
-            log.i("Send Single Frame")
-            msg = "%s:0x%x,0x%x,0x%x," % (TAG_CAN, canmsg.id, canmsg.type, MAX_LEN)
-            for i in canmsg.data:
-                msg += "0x%X " % i
+        # canmsg.canFrames = canFrames
+        # if len(self.data) <= MAX_LEN:
+        #     log.i("Send Single Frame")
+        #     msg = "%s:0x%x,0x%x,0x%x," % (TAG_CAN, canmsg.id, canmsg.type, MAX_LEN)
+        #     for i in canmsg.data:
+        #         msg += "0x%X " % i
+        #     if canmsg.respid > 0:
+        #         self.canMsgWaitRespList[canmsg.respid] = CanMsgResp(canmsg.respid, canmsg)
+        #         canmsg.starttime = common.current_milli_time()
+        #         canmsg.timeout = DEFAULT_MSG_TIMEOUT_MS
+        #     return self.dosend(msg)
+        if canFrames is not None and len(canFrames) > 0:
+            canmsg.canFrames = canFrames
             if canmsg.respid > 0:
-                self.canMsgSent[canmsg.id] = canmsg
-                self.canMsgWaitRespList[canmsg.respid] = CanMsgResp(canmsg.respid, canmsg)
-                canmsg.starttime = common.current_milli_time()
-                canmsg.timeout = DEFAULT_MSG_TIMEOUT_MS
-            return self.dosend(msg)
+                canrsp = CanMsgResp(canmsg.respid, canmsg)
+                self.canMsgWaitRespList[canmsg.respid] = canrsp
+                canrsp.starttime = common.current_milli_time()
+                canrsp.timeout =  canrsp.starttime + DEFAULT_MSG_TIMEOUT_MS
+            ret = self.sendCanFrame(canFrames[0])
+        else:
+            ret = common.ERR_NO_DATA
+            log.e("Not can frame to send")
+        return ret
     
-    def sendCanFrame(self, canframe):
-        log.i("sendCanFrame")
-        msg = "%s:0x%x,0x%x,0x%x," % (TAG_CAN, canframe.id, canframe.type, canframe.maxLen)
-        for i in canframe.rawdata:
-            msg += "0x%02X " % i
+    def sendCanFrame(self, cf):
+        log.i("sendCanFrame 0x%x" % cf.id)
+        msg = "%s:0x%x,0x%x,0x%x," % (TAG_CAN, cf.id, cf.type, cf.maxLen)
+        log.dumpBytes("sendCanFrame data", cf.rawdata)
+        for i in cf.rawdata:
+            msg += "0x%02X " % (i & 0xFF)
         return self.dosend(msg)
 
     def filter(self, mask):

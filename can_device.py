@@ -22,6 +22,9 @@ class CanDevice:
     def sendFilter(self, filter):
         return common.ERR_NOT_SUPPORT
 
+    def filter(self, filter):
+        return common.ERR_NOT_SUPPORT
+
     def send(self, canmsg):
         return common.ERR_NOT_SUPPORT
 

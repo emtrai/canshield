@@ -117,7 +117,7 @@ void resplogHigh3(const char* msg, const char* data, int len=8, unsigned type=HE
     SERIAL_PORT_MONITOR.print(msg);
   }
   for (i = 0; i < len; i++){
-    SERIAL_PORT_MONITOR.print(data[i], type);
+    SERIAL_PORT_MONITOR.print(data[i] & 0xFF, type);
     SERIAL_PORT_MONITOR.print(" ");
   }
   SERIAL_PORT_MONITOR.println();
@@ -347,7 +347,7 @@ void canSend(){
       if (idx > 0){
         resplogHigh2("send 0x", id, HEX);
 //        resplogHigh3("send data ", cdata, MAX_DATA_SIZE, HEX);
-        resplog3("send data ", cdata, MAX_DATA_SIZE, HEX);
+        resplogHigh3("send data ", cdata, MAX_DATA_SIZE, HEX);
         int ret = CAN.sendMsgBuf(id, type, len, cdata);
         resplogHigh2("ret", ret);
       }

@@ -3,6 +3,7 @@
 DEFAULT_TAG = "canpc"
 
 DEBUG=True
+DEBUG=False
 
 from common import current_milli_time
 
@@ -11,12 +12,10 @@ def logD(msg, tag=DEFAULT_TAG):
         print("[%d] D (%s) %s" % (current_milli_time(), tag, msg))
 
 def log(msg, tag=DEFAULT_TAG):
-    if DEBUG:
-        print("[%d] I (%s) %s" % (current_milli_time(), tag, msg))
+    print("[%d] I (%s) %s" % (current_milli_time(), tag, msg))
 
 def logE(msg, tag=DEFAULT_TAG):
-    if DEBUG:
-        print("[%d] E (%s) %s" % (current_milli_time(), tag, msg))
+    print("[%d] E (%s) %s" % (current_milli_time(), tag, msg))
 
 
 class Log:
@@ -35,11 +34,13 @@ class Log:
 
     def dumpBytes(self, msg, data):
         if DEBUG:
-            if (data is not None and len(data) > 0):
-                msg += "(%d)0x" % len(data)
-                for i in data:
-                    msg += "%x" % i
-                return msg
-            else:
-                msg += "no data"
-            log.d(msg)
+            self.printBytes(msg, data)
+
+    def printBytes(self, msg, data):
+        if (data is not None and len(data) > 0):
+            msg += "(%d) 0x" % len(data)
+            for i in data:
+                msg += "%02x" % i
+        else:
+            msg += "no data"
+        self.i(msg)

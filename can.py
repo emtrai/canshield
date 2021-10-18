@@ -1,5 +1,7 @@
 
 
+from genericpath import exists
+import traceback
 from can_msg import CanMsg
 from can_shield import CanShieldDevice
 from time import sleep
@@ -21,9 +23,10 @@ def getOpts():
     parser.add_argument('--port', help="Port config", default="/dev/cu.usbmodem14201")
     parser.add_argument('--speed', type=int, help="Speed config", default=921600)
     parser.add_argument('--script', help="Text to contains CAN message")
-    parser.add_argument('--canmsg', help="Can message to be send")
-    parser.add_argument('--canid', help="Can message to be send")
-    parser.add_argument('--flow', help="Can message to be send")
+    parser.add_argument('--cmd', help="Command to be used")
+    parser.add_argument('--canid', help="canid[,respid] : Can id to be used, and response can id if any")
+    parser.add_argument('--filter', help="<id>,<id> : List of can id to be set mask/filter")
+    parser.add_argument('--flow', help="[name],[script file] : flow <name> to be run with script if any")
 
     return parser.parse_args(sys.argv[1:])
 
@@ -38,18 +41,19 @@ def recv_callback(err, type, resp):
             runningflow.onCanReceive(resp)
     log.d("%s:%s:%s" % (err, type, msg))
 
-# FLOW_STEPS_MASK = 0
-# FLOW_STEPS_SEND_CAN = 1
-# FLOW_STEPS_WAIT = 2
-# FLOW_STEPS_BREAK = 3
+def rec_can_callback(canframe):
+    if canframe is not None:
+        log.printBytes(">>> CAN FRAME 0x%x:" % (canframe.id), canframe.rawdata)
+
+
 global canid
 global respid
-# canid = 0
-# respid = 0
+
 flows = {}
 flows[can_flow.TAG] = can_flow.CanFlow.buildFlow
 flows[can_diag_dtc.TAG] = can_diag_dtc.CanDTCFlow.buildFlow
-
+# import can_diag_access
+# flows[can_diag_access.TAG] = can_diag_access.CanDiagAcl.buildFlow
 
 
 def setIds(candev = None, params = None):
@@ -66,11 +70,12 @@ def setIds(candev = None, params = None):
     else:
         log.e("Invalid id params")
 
+# parse param flow: <name>,<script path>
 def paramFlow(params):
     runflow = None
     if (params is not None):
         log.d("Parse Flow %s" % params)
-        items = params.split(",",2)
+        items = params.split(",", 1)
         nitem = len(items)
         name = None
         script = None
@@ -83,13 +88,18 @@ def paramFlow(params):
                 runflow = flows[name](script=script, canid=canid, respid=respid)
     return runflow
 
-def execFlow(candev, flow):
+def execFlow(candev, flow, steps = None):
     log.d("execFlow")
     if flow is not None:
         log.i("Run flow %s" % flow.getName())
-        runningflow = flow
-        ret = flow.runFlow(candev)
-        runningflow = None
+        try:
+            runningflow = flow
+            ret = flow.runFlow(candev, steps)
+        except:
+            traceback.print_exc()
+            ret = common.ERR_EXCEPTION
+        finally:
+            runningflow = None
         log.i("Run flow '%s' Result %d" % (flow.getName(), ret))
     else:
         log.e("invalid flow")
@@ -97,9 +107,15 @@ def execFlow(candev, flow):
     return ret
 
 def doRunFlow(candev = None, params = None):
-    log.d("runFlow %s" % params)
-    runFlow = paramFlow(params)
-    return execFlow(candev, runFlow)
+    if params is None or len(params) == 0:
+        for key,_ in flows.items():
+            print(key)
+        # log.i("Flow %s" % str(flows.keys))
+        return common.ERR_NONE
+    else:
+        log.d("runFlow %s" % params)
+        runFlow = paramFlow(params)
+        return execFlow(candev, runFlow)
     
 
 def doRunScript(candev = None, params = None):
@@ -107,14 +123,29 @@ def doRunScript(candev = None, params = None):
     runFlow = can_flow.CanFlow(script = params, canid=canid, respid=respid)
     return execFlow(candev, runFlow)
 
-def doRunCanMsg(candev = None, params = None):
-    
-    return common.ERR_NONE
 
 def doRunCmds(candev = None, params = None):
-    
-    return common.ERR_NONE
+    log.i("doRunCmds %s" % params)
+    runFlow = can_flow.CanFlow(canid=canid, respid=respid)
+    ret = runFlow.parseStep(params)
+    if ret is not None and len(ret) > 0 :
+        return execFlow(candev, runFlow, [ret])
 
+def doFilter(candev = None, params = None):
+    log.i("doFilter %s" % params)
+    items = params.split(",")
+    candis = []
+    for item in items:
+        item = item.strip()
+        if len(item) > 0:
+            candis.append(int(item, 0))
+    log.d("Id %s" % str(candis))
+    mask = 0
+    if len(candis) > 0:
+        for id in candis:
+            mask = mask | (id & 0xFFFF)
+        candev.filter(mask)
+    return common.ERR_NONE
 
 runflows = []
 def doRun(candev = None, params = None):
@@ -135,10 +166,9 @@ actions = {
         "id":setIds,
         "flow":doRunFlow,
         "script":doRunScript,
-        "can":doRunCanMsg,
         "cmd":doRunCmds,
-        "run":doRun
-
+        "run":doRun,
+        "filter":doFilter
     }
 
 if (__name__ == "__main__"):
@@ -162,22 +192,32 @@ if (__name__ == "__main__"):
 
     if options.script is not None and len(options.script) > 0:
         if  (os.path.exists(options.script)):
+            log.i("Add script from '%s' to list flows" % options.script)
             runflows.append(can_flow.CanFlow(script = options.script, canid=canid, respid=respid))
     
+    if (options.canid is not None) and len(options.canid) > 0:
+        setIds(params = options.canid )
+
     if (options.flow is not None) and len(options.flow) > 0:
         runFlow = paramFlow(options.flow)
         if runFlow is not None:
+            log.i("Add flow from '%s' to list flows" % options.flow)
             runflows.append(runFlow)
     
     log.i("Start can device")
-    if candev.isReady():
-        ret = candev.start(recv_callback)
-    else:
-        log.e("Can device is not ready, try to connect again")
+    ret = 0
+    ret = candev.start(recv_callback, rec_can_callback)
+
+    if (options.filter is not None) and len(options.filter) > 0:
+        ret = doFilter(candev, options.filter)
 
     if ret == common.ERR_NONE:
         ret = doRun(candev, None)
 
+    if (options.cmd is not None) and len(options.cmd) > 0:
+        log.i("Run command '%s'" % options.cmd)
+        ret = doRunCmds(candev, options.cmd)
+    
     while True:
 
         value = input("Action> ")
@@ -185,7 +225,7 @@ if (__name__ == "__main__"):
         action = None
         params = None
         if len(value) > 0:
-            items = value.split(" ", 2)
+            items = value.split(" ", 1)
             nitem = len(items)
             if nitem > 0:
                 action = items[0].strip().lower()
@@ -195,7 +235,11 @@ if (__name__ == "__main__"):
         if action is None:
             continue
         if action in actions:
-            ret = actions[action](candev, params)
+            try:
+                log.e("Run action '%s'" % action)
+                ret = actions[action](candev, params)
+            except:
+                traceback.print_exc()
         elif action in ("quit", "exit", "q"):
             break
         else:
@@ -203,116 +247,3 @@ if (__name__ == "__main__"):
             log.i("Actions: %s" % str(actions.keys()))
 
     candev.stop()
-
-    # if (options.input is not None) and (os.path.exists(options.input)):
-    #     flows = []
-    #     candis = []
-    #     # canmsg_list = []
-    #     with open(options.input) as fp:
-    #         while True:            
-    #             # Get next line from file
-    #             line = fp.readline()
-            
-    #             # if line is empty
-    #             # end of file is reached
-    #             if not line:
-    #                 break
-    #             line = line.strip()
-    #             if (not line.startswith("#")):
-    #                 lines = line.split(":", 1)
-    #                 if (len(lines[0]) > 0):
-    #                     if (lines[0] == "ids"):
-    #                         ids = lines[1].split(",")
-    #                         if (len(ids) > 0):
-    #                             for id in ids:
-    #                                 id = id.strip()
-    #                                 if len(id) > 0:
-    #                                     candis.append(int(id, 0))
-    #                         log.i("Id %s" % str(candis))
-                            
-                            
-    #                         mask = 0
-    #                         if len(candis) > 0:
-    #                             for id in candis:
-    #                                 mask = mask | id
-    #                             flows.append([FLOW_STEPS_MASK, mask])
-
-    #                     elif (lines[0] == "can"):
-    #                         items = lines[1].split(",")
-    #                         if (len(items) > 3):
-    #                             canmsg = CanMsg()
-    #                             canmsg.id = int(items[0].strip(), 0)
-    #                             canmsg.type = int(items[1].strip(), 0)
-    #                             canmsg.maxLen = int(items[2].strip(), 0)
-    #                             datas = items[3].strip().split(" ")
-    #                             if len(datas) > 0:
-    #                                 candata = []
-    #                                 for data in datas:
-    #                                     data = data.strip()
-    #                                     if len(data) > 0:
-    #                                         candata.append(int(data, 0))
-    #                                 if len(candata) > 0:
-    #                                     canmsg.addData(candata)
-    #                                     flows.append([FLOW_STEPS_SEND_CAN, canmsg])
-    #                                     # canmsg_list.append(canmsg)
-    #                                 else:
-    #                                     log.e("%s: no data" % canmsg.id)
-    #                             else:
-    #                                 log.e("%s: no data" % canmsg.id)
-    #                         else:
-    #                             log.e("Invalid data %s" % line)
-    #                     elif (lines[0] == "wait"):
-    #                         wait = lines[1].strip()
-    #                         if len(wait) > 0:
-    #                             flows.append([FLOW_STEPS_WAIT,  int(wait, 0)])
-    #                     elif (lines[0] == "wait"):
-    #                         wait = lines[1].strip()
-    #                         if len(wait) > 0:
-    #                             flows.append([FLOW_STEPS_WAIT,  int(wait, 0)])
-    #                     elif (lines[0] == "break"):
-    #                         flows.append([FLOW_STEPS_BREAK,  None])
-                                
-        
-
-
-    #     if len(flows) > 0:
-    #         candev.start(recv_callback)
-
-    #         for item in flows:
-    #             if item[0] == FLOW_STEPS_MASK:
-    #                 # mask = ~(item[1])
-    #                 mask = (item[1])
-    #                 log.i("Send mask 0x%x" % mask)
-    #                 candev.sendMask(mask)
-    #                 sleep(0.5)
-    #                 candev.sendFilter(item[1])
-    #             elif item[0] == FLOW_STEPS_SEND_CAN:
-    #                 log.i("Send can %s" % item[1].toString())
-    #                 item[1].sendTo(candev)
-    #             elif item[0] == FLOW_STEPS_WAIT:
-    #                 waittime = item[1]/1000
-    #                 log.i("Sleep %f s" % waittime)
-    #                 sleep(waittime)
-    #             elif item[0] == FLOW_STEPS_BREAK:
-    #                 candev.sendBreak()
-
-
-    #         candev.stop()
-    #     else:
-    #         log.e("Nothing to do")
-
-
-    # canmsg = CanMsg(0x684)
-
-    # canmsg.maxLen = 8
-    # canmsg.addData([0x02, 0x19, 0x01])
-
-    # candev.start(recv_callback)
-
-    # sleep(1)
-    # for cnt in range(3):
-    #     log.i ("send %s" % canmsg.toString())
-    #     canmsg.sendTo(candev)
-    #     sleep(1)
-
-    # candev.stop()

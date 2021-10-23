@@ -1,3 +1,5 @@
+# Author: anhnh @ 2021
+
 from applog import Log
 import common
 

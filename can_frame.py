@@ -1,3 +1,5 @@
+# Author: anhnh @ 2021
+
 from applog import DEBUG, Log
 import common
 
@@ -61,7 +63,7 @@ class CanFrameSF(CanFrame):
         self.frametype = FRAME_TYPE_EXTEND
     
     def parse(self, rawdata):
-        log.d("CanFrame: Parse")
+        log.d("CanFrameSF: Parse")
         if (rawdata is not None):
             log.dumpBytes("rawdata: ", rawdata)
 
@@ -241,7 +243,7 @@ def parse2CanFrame(id = 0, data = None, type = TYPE_STANDARD, maxLen = MAX_LEN, 
         if ft == FRAME_TYPE_EXTEND:
             log.d("Extend frame")
             switcher = {
-                FRAME_SF:CanFrame(id = id, type = type, maxLen = maxLen),
+                FRAME_SF:CanFrameSF(id = id, type = type, maxLen = maxLen),
                 FRAME_FIRST:CanFrameFirst(id = id, type = type, maxLen = maxLen),
                 FRAME_FLOW:CanFrameFlow(id = id, type = type, maxLen = maxLen),
                 FRAME_CONSECUTIVE:CanFrameConsecutive(id = id, type = type, maxLen = maxLen)
@@ -268,8 +270,11 @@ def canMsg2Frames(canmsg):
     import can_msg_fac
     canFrames = []
     sz = len(canmsg.data)
+    log.d("data sz %d" % sz)
+    if sz > 0:
+        log.dumpBytes("data msg: ", canmsg.data)
     if canmsg.msgType == can_msg_fac.CAN_MSG_TYPE_DIAG:
-        if sz > MAX_LEN:
+        if sz >= MAX_LEN: # 1 bytes for PCI, so max is only 7 bytes
             log.d("parse canmsg into multi frames")
             firstFrame = CanFrameFirst(id = canmsg.id, type = canmsg.type)
             n = firstFrame.build(canmsg.data)
@@ -292,9 +297,8 @@ def canMsg2Frames(canmsg):
     else:
         log.e("Unsupported message type %d" % canmsg.msgType)
     
-    if DEBUG:
-        log.d("convert to %d frames" % len(canFrames))
-        for frame in canFrames:
-            log.dumpBytes("frame %s" % frame.toString(), frame.rawdata)
+    log.i("convert %d bytes into %d frames" % (sz, len(canFrames)))
+    for frame in canFrames:
+        log.printBytes("frame %s" % frame.toString(), frame.rawdata)
     
     return canFrames

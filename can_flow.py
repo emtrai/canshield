@@ -1,3 +1,5 @@
+# Author: anhnh @ 2021
+
 import os
 
 from can_msg import CanMsg
@@ -54,7 +56,7 @@ class CanFlow:
         return TAG
     
     @staticmethod
-    def buildFlow(script = None, cmds = None, canid = 0, respid = 0):
+    def buildFlow(script = None, cmds = None, canid = 0, respid = 0, params = None):
         log.i("build flow")
         return CanFlow(script, cmds, canid, respid)
 
@@ -62,6 +64,7 @@ class CanFlow:
         pass
     
     def wait_cond_can(self, timeout = 0):
+        ret = common.ERR_NONE
         log.i("wait_cond_can %d" % timeout)
         try:
             self.cond_can = threading.Condition()
@@ -73,10 +76,17 @@ class CanFlow:
                 else:
                     waiting = self.max_can_timeout
                 log.i("wait_cond_can %f" % waiting)
-                self.cond_can.wait(waiting)
-
+                if self.cond_can.wait(waiting):
+                    ret = common.ERR_NONE
+                else:
+                    log.e("Wait cond timeout")
+                    ret = common.ERR_TIMEOUT
+        except:
+            log.e("Wait cond timeout")
+            ret = common.ERR_TIMEOUT
         finally:
             self.cond_can = None
+        return ret
         
     def release_cond_can(self):
         log.i("release_cond_can")
@@ -96,12 +106,33 @@ class CanFlow:
             
             if self.sending_can_msg is not None :
                 log.d("sending_can_msg can 0x%x" % (self.sending_can_msg.id))
-                if self.sending_can_msg.id == canresp.canmsg.id:
-                    log.printBytes("0x%x - 0x%x: " % (canresp.canmsg.id, canresp.id), canresp.data)
-                if (canresp.data[1] == 0x7F) and (canresp.data[3] == 0x78):
+                # if self.sending_can_msg.id == canresp.canmsg.id:
+                #     log.printBytes("0x%x - 0x%x: " % (canresp.canmsg.id, canresp.id), canresp.data)
+                if (canresp.data[0] == 0x7F) and (canresp.data[2] == 0x78):
                     shouldwait = True
 
         if not shouldwait:
+            if canresp is not None and canresp.canmsg is not None and canresp.data is not None:
+                datalen = len(canresp.data)
+                printbytes = []
+                
+                if datalen > 32:
+                    printbytes = canresp.data[:32] # max 32 bytes to print
+                else:
+                    printbytes = canresp.data
+                
+                log.i("################################################################")
+                log.i(">>> MSG: %s" % canresp.canmsg.rawmsg)
+                log.printBytes(">>> Response 0x%x - 0x%x: ###### " % (canresp.canmsg.id, canresp.id), printbytes)
+                txtprint = ""
+                for i in printbytes:
+                    if i < 32 or i > 255:
+                        txtprint += "."
+                        continue
+                    txtprint += "%c" % i
+                log.i(">>> Text: %s" % txtprint)
+                log.i("################################################################")
+
             self.release_cond_can()
             return common.ERR_NONE
         else:
@@ -115,8 +146,10 @@ class CanFlow:
             tag = None
             candis = []
             if lines is not None and len(lines) > 0:
-                tag = line[0].strip()
+                tag = lines[0].strip()
             if (tag is not None and len(tag) > 0):
+                log.d("tag: %s" % tag)
+                log.d("value: %s" % lines[1])
                 if tag == FLOW_TAG_CAN_TIMEOUT:
                     val = lines[1].strip()
                     max_can_timeout = 0
@@ -240,7 +273,7 @@ class CanFlow:
         return self.runFlow(candev, flows)
 
 
-    def runFlow(self, candev, flows = None):
+    def runFlow(self, candev, flows = None, params = None):
         log.i("Run flow")
         ret = common.ERR_NONE
         if not candev.isReady():

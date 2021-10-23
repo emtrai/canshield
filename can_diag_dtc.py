@@ -1,3 +1,5 @@
+# Author: anhnh @ 2021
+
 from can_msg import CanMsg
 import common
 from applog import Log
@@ -16,7 +18,7 @@ class CanDTCFlow(CanDiagFlow):
         return TAG
     
     @staticmethod
-    def buildFlow(script = None, cmds = None, canid = 0, respid = 0):
+    def buildFlow(script = None, cmds = None, canid = 0, respid = 0, params = None):
         log.i("build flow")
         return CanDTCFlow(script, cmds, canid, respid)
 
@@ -31,7 +33,7 @@ class CanDTCFlow(CanDiagFlow):
         self.release_cond_can()
         return common.ERR_NONE
 
-    def runDiagCmds(self, candev):
+    def runDiagCmds(self, candev, params = None):
         log.i("runDiagCmds ")
         if self.canid != 0 and self.respid != 0:
             can_diag_diag = can_msg_fac.CanMsgFac.buildMsgFromString("0x%x, 0x%x, 0, 8, 0x19 0x01 0xFF" % (self.canid, self.respid), can_msg_fac.CAN_MSG_TYPE_DIAG)

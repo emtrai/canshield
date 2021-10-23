@@ -1,6 +1,7 @@
 // demo: CAN-BUS Shield, receive data with interrupt mode
 // when in interrupt mode, the data coming can't be too fast, must >20ms, or else you can use check mode
 // loovee, 2014-6-13
+// Author: anhnh @2021
 
 #include <SPI.h>
 

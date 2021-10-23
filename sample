@@ -1,3 +1,5 @@
+# Author: anhnh @ 2021
+
 #<tag>:<value
 # filter:<id>,<id> --> set filter ids (receive message from those can ids)
 # sleep: <time in ms> --> sleep
